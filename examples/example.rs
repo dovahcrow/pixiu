@@ -3,13 +3,14 @@ use dotenv::dotenv;
 use env_logger::init;
 use failure::Fallible;
 use futures::stream::StreamExt;
-use log::{error, info, trace, warn};
+use log::info;
 use pixiu::{Exchange, Strategy, XTPExchange};
 use std::net::SocketAddrV4;
 use std::thread::sleep;
 use std::time::Duration;
 use structopt::StructOpt;
 use tokio::sync::broadcast::Receiver;
+use xtp::XTPExchangeType;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "example", about = "An example of xtp-rs usage.")]
@@ -72,18 +73,21 @@ impl MyStrategy {
 
 #[async_trait]
 impl Strategy<XTPExchange> for MyStrategy {
-    async fn init(
-        &mut self,
+    async fn run(
+        mut self: Box<Self>,
         rx: Receiver<<XTPExchange as Exchange>::Event>,
         h: <XTPExchange as Exchange>::Handle,
     ) {
-        trace!("MyStrategy {} init", self.id);
+        info!("MyStrategy {} running", self.id);
+        let codes_sh = ["600036"];
+        let codes_sz = ["000001"];
+        h.subscribe_market_data(&codes_sh, XTPExchangeType::SH)
+            .unwrap();
+        h.subscribe_market_data(&codes_sz, XTPExchangeType::SZ)
+            .unwrap();
+
         self.rx = Some(rx);
         self.h = Some(h);
-    }
-
-    async fn run(self: Box<Self>) {
-        info!("MyStrategy {} running", self.id);
         let mut rx = self.rx.unwrap();
         while let Some(msg) = rx.next().await {
             info!("MyStrategy {} Received {:?}", self.id, msg);

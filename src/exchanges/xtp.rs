@@ -9,8 +9,10 @@ use self::trader_event::TraderEvent;
 use self::traderspi::TSpi;
 use crate::{Exchange, Strategy};
 use async_trait::async_trait;
+use failure::Fallible;
 use futures::stream::StreamExt;
 use std::net::SocketAddrV4;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::{broadcast, mpsc};
 use xtp::{QuoteApi, TraderApi, XTPExchangeType, XTPLogLevel, XTPProtocolType};
@@ -23,8 +25,8 @@ pub struct XTPExchange {
     key: String,
     strategies: Vec<Box<dyn Strategy<XTPExchange> + Send + Sync>>,
 
-    quote_api: Option<QuoteApi>,
-    trader_api: Option<TraderApi>,
+    quote_api: Option<Arc<QuoteApi>>,
+    trader_api: Option<Arc<TraderApi>>,
 
     quote_rx: Option<mpsc::Receiver<QuoteEvent>>,
     trader_rx: Option<mpsc::Receiver<TraderEvent>>,
@@ -32,7 +34,28 @@ pub struct XTPExchange {
     strategy_tx: broadcast::Sender<QuoteEvent>,
 }
 
-pub struct XTPExchangeHandle {}
+#[derive(Clone)]
+pub struct XTPExchangeHandle {
+    quote_api: Arc<QuoteApi>,
+    trader_api: Arc<TraderApi>,
+}
+
+impl XTPExchangeHandle {
+    fn new(quote_api: Arc<QuoteApi>, trader_api: Arc<TraderApi>) -> Self {
+        Self {
+            quote_api,
+            trader_api,
+        }
+    }
+
+    pub fn subscribe_market_data(
+        &self,
+        tickers: &[&str],
+        exchange_id: XTPExchangeType,
+    ) -> Fallible<()> {
+        self.quote_api.subscribe_market_data(tickers, exchange_id)
+    }
+}
 
 impl XTPExchange {
     pub fn new(
@@ -73,15 +96,7 @@ impl XTPExchange {
         )
         .unwrap();
 
-        // TODO: Delete me
-        let codes_sh = ["600036"];
-        let codes_sz = ["000001"];
-        qapi.subscribe_market_data(&codes_sh, XTPExchangeType::SH)
-            .unwrap();
-        qapi.subscribe_market_data(&codes_sz, XTPExchangeType::SZ)
-            .unwrap();
-
-        self.quote_api = Some(qapi);
+        self.quote_api = Some(Arc::new(qapi));
         self.quote_rx = Some(rx);
 
         let mut tapi = TraderApi::new(1, "/tmp/xtp", XTPLogLevel::Trace);
@@ -97,8 +112,15 @@ impl XTPExchange {
         )
         .unwrap();
 
-        self.trader_api = Some(tapi);
+        self.trader_api = Some(Arc::new(tapi));
         self.trader_rx = Some(rx);
+    }
+
+    fn handle(&self) -> XTPExchangeHandle {
+        XTPExchangeHandle::new(
+            self.quote_api.clone().unwrap(),
+            self.trader_api.clone().unwrap(),
+        )
     }
 }
 
@@ -109,11 +131,10 @@ impl Exchange for XTPExchange {
 
     async fn run(mut self) {
         self.sys_init();
+        let h = self.handle();
 
-        for mut s in self.strategies {
-            s.init(self.strategy_tx.subscribe(), XTPExchangeHandle {})
-                .await;
-            tokio::spawn(s.run());
+        for s in self.strategies {
+            tokio::spawn(s.run(self.strategy_tx.subscribe(), h.clone()));
         }
 
         let mut qrx = self.quote_rx.unwrap();

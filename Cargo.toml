@@ -12,6 +12,7 @@ tokio = { version = "0.2", features = ["time", "sync", "macros", "stream", "rt-t
 futures = "0.3"
 async-trait = "0.1"
 log = "0.4"
+failure = "0.1"
 
 [dev-dependencies]
 dotenv = "0.15"
